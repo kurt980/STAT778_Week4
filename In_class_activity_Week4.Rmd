@@ -1,0 +1,261 @@
+---
+title: "In_class_activity_Week4"
+output: html_document
+author: "Kurt Ji"
+date: "2026-02-11"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Activity 2
+
+Let the model be $q_\theta(x)=f(x;\theta)$. Given the empirical population KL divergence, where $p$ is the true distribution:
+
+$$
+\widehat D_{KL}(p\|q_\theta)
+:=\frac{1}{n}\sum_{i=1}^n \log\left(\frac{p(x_i)}{q_\theta(x_i)}\right).
+$$
+Then we know the log-likelihood for the model $f(\cdot;\theta)$ is
+
+$$
+M_n(\theta)=\frac{1}{n}\sum_{i=1}^n \log f(x_i;\theta)
+=\frac{1}{n}\sum_{i=1}^n \log q_\theta(x_i),
+$$
+And the MLE is to maximize the above log-likelihood. which is 
+
+$$
+\hat{\theta}_{MLE} = \arg\max_{\theta \in \Theta} M_n(\theta).
+$$
+
+
+Now we look at the KL divergence minimizer:
+
+Write out the KL divergence:
+
+$$
+\widehat D_{KL}(\hat p\|q_\theta)
+=\frac{1}{n}\sum_{i=1}^n \log\left(\frac{p(x_i)}{q_\theta(x_i)}\right)
+=\frac{1}{n}\sum_{i=1}^n \left(\log(p(x_i)-\log q_\theta(x_i)\right)\\
+=\underbrace{\log(p(x_i))}_{\text{constant in }\theta}
+-\frac{1}{n}\sum_{i=1}^n \log q_\theta(x_i).
+$$
+
+
+Because $\log(p(x_i))$ does not depend on $\theta$, then we can get the KLD minimizer is:
+
+$$
+\arg\min_{\theta}\ \widehat D_{KL}(\hat p\|q_\theta)
+=
+\arg\max_{\theta}\ \frac{1}{n}\sum_{i=1}^n \log q_\theta(x_i).
+$$
+
+and maximizing $M_n(\theta)$ is the same as the MLE (equivalntly maximizing $\ell_n(\theta)=\sum_{i=1}^n \log f(x_i;\theta)$, since multiplying by $1/n$ does not change the maximizer). Therefore,
+
+$$
+\hat\theta_{KL}=\hat\theta_{MLE}.
+$$
+
+Finally, if:
+
+$$
+\hat f_{KL}(x):=f(x;\hat\theta_{KL}),
+\qquad
+\hat f_{MLE}(x):=f(x;\hat\theta_{MLE}).
+$$
+
+Form the above that $\hat\theta_{KL}=\hat\theta_{MLE}$, we have:
+
+$$
+\ \hat f_{KL}(x)=\hat f_{MLE}(x)\ \text{for all }x.
+$$
+
+
+
+## Activity 3
+
+write a function that computes the NED
+
+```{r}
+#' Simple KDE with Epanechnikov Kernel
+#' 
+#' Evaluate the simple KDE at one or more locations.
+#' 
+#' @param y numeric vector of evaluation points
+#' @param x numeric vector of univariate observations
+#' @param bw bandwidth for the kernel (default use [bw.nrd()]).
+#' @return numeric vector with values of the evaluated KDE 
+kde_epan <- function (y, x, bw = 2 * bw.nrd(x)) {
+  vapply(y, FUN.VALUE = numeric(1), FUN = \(pt) {
+    d <- (x - pt) / bw
+    ifelse(abs(d) < 1, 0.75 * (1 - d^2), 0) |> 
+      mean()
+  }) / bw
+}
+```
+
+```{r}
+# pearson residual
+pearson_residual <- function(p, q, x) {
+  # compute p(x) and q(x) (replace with kde)
+  p_x <- p(x)
+  q_x <- q(x)
+  # avoid dviding by zero
+  eps <- 1e-12
+  q_x <- pmax(q_x, eps)
+  
+  return((p_x/q_x) - 1)
+}
+
+# activity 3 funciton
+ned_with_kde <- function(x, bw, range = c(0,1), model_dens) {
+  
+  # parameterize p and q
+  p <- function(y) kde_epan(y=y, x=x, bw=bw)
+  q <- model_dens
+
+  # construct integrand at point y
+  integrand <- function(y) {
+    qy <- q(y)
+    ## if q close to 0, intergrand = 0, reasoning is: 
+    small <- (abs(qy) < 1e-6)
+    ## get the pearson residual
+    pear_res <- pearson_residual(p, q, y)
+    ## then compute the entire integrand
+    integrand <- (exp(-pear_res)-1) * qy
+    integrand[small] <- 0
+    return(integrand)
+  }
+  
+  # integration (could use gaussian quadrature)
+  ned <- integrate(integrand, lower=range[1], upper=range[2])
+  print(ned)
+  ned$value
+}
+```
+
+#### Test
+
+```{r}
+set.seed(123)
+x <- rbeta(100, shape1 = 4, shape2 = 3)
+bw <- 2 * bw.nrd(x)
+ned_with_kde(x, bw = bw, range = c(0, 1), model_dens = \(y) dbeta(y, shape1 = 4, shape2 = 3))
+```
+```{r}
+ned_with_kde(x, bw = bw, range = c(0, 1), model_dens = \(y) dbeta(y, shape1 = 3, shape2 = 3))
+```
+
+```{r}
+ned_with_kde(x, bw = bw, range = c(0, 1), model_dens = \(y) dbeta(y, shape1 = 4, shape2 = 4))
+```
+
+Seems to align well with the values in lecture note!
+
+
+## Activity 4
+
+```{r}
+# modify ned structure
+ned_with_kde_optimizer <- function(beta_params, x, bw, range = c(0,1)) {
+  # assign parameters to beta
+  model_dens <- function(y) dbeta(y, shape1 = exp(beta_params[1]), shape2 = exp(beta_params[2]))
+  # take care of extreme cases
+  ned <- tryCatch(
+    ned_with_kde(x = x, bw = bw, range = range, model_dens = model_dens),
+    error = function(e) Inf
+  )
+  ned
+}
+
+# activity 4
+naive_mnede_beta <- function(x, bw, par0 = c(log(4), log(3))) {
+  res <- optim(par = par0, fn = ned_with_kde_optimizer, x = x, bw = bw, range = c(0, 1), method = "Nelder-Mead")
+  res$par <- exp(res$par)
+  return(res)
+}
+```
+
+```{r}
+set.seed(123)
+x <- rbeta(100, shape1 = 4, shape2 = 3)
+bw <- 2 * bw.nrd(x)
+naive_mnede_beta(x, bw = bw)
+```
+
+We can see the function approximates the true parameters with some bias
+
+
+
+## Activity 5
+
+```{r}
+library(SparseGrid)
+
+# Use Gaussian quadrature to compute integration
+# write a function that does gaussian quadrature
+gauss_quadrat <- function(range = c(0, 1), M = 100, K = 15) {
+  
+  ## create M subintervals
+  breaks <- seq(range[1], range[2], length.out = M + 1)
+  left  <- breaks[1:M]
+  right <- breaks[2:(M + 1)]
+  mid   <- (left + right) / 2
+  half  <- (right - left) / 2
+  
+  ## let the function determine weights and nodes
+  gq <- SparseGrid::createIntegrationGrid(type = "GQU", dimension = 1, k = K)
+  nodes <- as.numeric(gq$X[, 1])  # nodes on [-1,1]
+  weights <- as.numeric(gq$W)       # weights on [-1,1]
+  
+  ## make the M*K matrix and vectorize for final return
+  x_mk   <- as.vector(outer(mid, nodes, "+") + outer(half, nodes, "*"))
+  A_mk <- as.vector(outer(half, weights, "*"))
+  list(x_mk = x_mk, A_mk = A_mk)
+}
+
+# modify the ned function with new integration method
+ned_with_kde_gq <- function(p_nodes, y_nodes, weights, model_dens) {
+  q_nodes <- model_dens(y_nodes)
+  # take care of extreme values
+  q_nodes <- pmax(q_nodes, 1e-10)
+  
+  # pearson residual
+  pear_res <- (p_nodes / q_nodes) - 1
+  integrand <- (exp(-pear_res) - 1) * q_nodes
+
+  sum(weights * integrand)
+}
+
+# create the new MNEDE function
+naive_mnede_beta_gq <- function(x, bw, par0, range = c(0, 1), M = 100, K = 15) {
+  # get weights and nodes
+  grid <- gauss_quadrat(range = range, M = M, K = K)
+  x_mk <- grid$x_mk
+  A_mk <- grid$A_mk
+
+  # compute KDE
+  p_nodes <- kde_epan(y = x_mk, x = x, bw = bw)
+  
+  # write 
+  obj <- function(beta_params) {
+    model_dens <- function(y) dbeta(y, shape1 = exp(beta_params[1]), shape2 = exp(beta_params[2]))
+    ned_with_kde_gq(p_nodes = p_nodes, y_nodes = x_mk, weights = A_mk, model_dens = model_dens)
+  }
+
+  res <- optim(par = par0, fn = obj, method = "Nelder-Mead")
+  res$par <- exp(res$par)  # report on natural scale
+  res
+}
+```
+
+```{r}
+set.seed(123)
+x <- rbeta(100, shape1 = 4, shape2 = 3)
+bw <- 2 * bw.nrd(x)
+
+naive_mnede_beta_gqu(x = x, bw = bw, par0 = c(log(4), log(3)), M = 100, K = 15)
+```
+
+We can see the function runs much faster (<0.1 sec vs. 5 secs) and returns much more accurate results
